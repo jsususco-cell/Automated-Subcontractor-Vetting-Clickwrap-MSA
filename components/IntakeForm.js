@@ -1,9 +1,11 @@
 "use client";
 
 import { useState } from "react";
+import { upload } from "@vercel/blob/client";
 import { MSA_TITLE, MSA_TEXT_ES } from "@/lib/msa";
 
 const EIN_PATTERN = /^\d{2}-\d{7}$/;
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 
 // Compliance documents the contractor must upload (PDF, <=10MB each).
 // `key` maps to the corresponding Quickbase file-attachment field.
@@ -31,6 +33,7 @@ export default function IntakeForm() {
   const [errors, setErrors] = useState({});
   const [banner, setBanner] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState("");
   const [done, setDone] = useState(false);
 
   // Bilingual helper: returns the string for the active language.
@@ -125,9 +128,26 @@ export default function IntakeForm() {
   async function handleSubmit(event) {
     event.preventDefault();
     setBanner(null);
+    setUploadStatus("");
     const form = new FormData(event.currentTarget);
 
     const e = validate(form);
+
+    // Collect and validate selected files (PDF, <=10MB).
+    const selected = [];
+    for (const u of UPLOADS) {
+      const file = form.get(`file_${u.key}`);
+      if (file && typeof file === "object" && file.size > 0) {
+        if (file.type !== "application/pdf") {
+          e[`file_${u.key}`] = L("Debe ser un PDF.", "Must be a PDF.");
+        } else if (file.size > MAX_FILE_SIZE) {
+          e[`file_${u.key}`] = L("Tamaño máximo 10MB.", "Max size 10MB.");
+        } else {
+          selected.push({ key: u.key, file });
+        }
+      }
+    }
+
     setErrors(e);
     if (Object.keys(e).length > 0) {
       setBanner({
@@ -137,49 +157,70 @@ export default function IntakeForm() {
       return;
     }
 
-    // Text payload only for now. File uploads are wired in Phase 2 (Vercel Blob
-    // client-direct upload -> blob URLs passed here), then forwarded to n8n.
-    // ACH banking is intentionally NOT collected here (deferred to post-approval).
-    const payload = {
-      companyName: form.get("companyName"),
-      trade: form.get("trade"),
-      entityType,
-      ownerName: form.get("ownerName"),
-      ein: form.get("ein"),
-      licenseNumber: form.get("licenseNumber"),
-      dacoReg: form.get("dacoReg"),
-      streetAddress: form.get("streetAddress"),
-      city: form.get("city"),
-      state: form.get("state"),
-      zip: form.get("zip"),
-      municipio: form.get("municipio"),
-      yearsInBusiness: form.get("yearsInBusiness"),
-      revenue: form.get("revenue"),
-      activeCrews: form.get("activeCrews"),
-      bondSingle: form.get("bondSingle"),
-      canMeetVolume: form.get("canMeetVolume") === "on",
-      hasLineOfCredit: form.get("hasLineOfCredit") === "on",
-      bonded: form.get("bonded") === "on",
-      contactName: form.get("contactName"),
-      contactEmail: form.get("contactEmail"),
-      contactPhone: form.get("contactPhone"),
-      accountingName: form.get("accountingName"),
-      accountingEmail: form.get("accountingEmail"),
-      accountingPhone: form.get("accountingPhone"),
-      references: [0, 1, 2].map((i) => ({
-        name: form.get(`refName${i}`),
-        company: form.get(`refCompany${i}`),
-        phone: form.get(`refPhone${i}`),
-        email: form.get(`refEmail${i}`),
-      })),
-      signers,
-      attestation: form.get("attestation") === "on",
-      personalGuarantee: form.get("personalGuarantee") === "on",
-      executedAt: new Date().toISOString(),
-    };
-
     setSubmitting(true);
     try {
+      // Upload each PDF directly from the browser to Vercel Blob, which avoids
+      // the serverless request-body size limit. We pass the resulting URLs to
+      // the submit endpoint; Phase 3's n8n flow fetches them and attaches them
+      // to Quickbase, then deletes the temporary blobs.
+      const documents = [];
+      for (let i = 0; i < selected.length; i++) {
+        const { key, file } = selected[i];
+        setUploadStatus(
+          L(
+            `Subiendo archivo ${i + 1} de ${selected.length}…`,
+            `Uploading file ${i + 1} of ${selected.length}…`
+          )
+        );
+        const blob = await upload(file.name, file, {
+          access: "public",
+          handleUploadUrl: "/api/blob/upload",
+          clientPayload: JSON.stringify({ key }),
+        });
+        documents.push({ key, url: blob.url, filename: file.name });
+      }
+      setUploadStatus("");
+
+      // ACH banking is intentionally NOT collected here (deferred to post-approval).
+      const payload = {
+        companyName: form.get("companyName"),
+        trade: form.get("trade"),
+        entityType,
+        ownerName: form.get("ownerName"),
+        ein: form.get("ein"),
+        licenseNumber: form.get("licenseNumber"),
+        dacoReg: form.get("dacoReg"),
+        streetAddress: form.get("streetAddress"),
+        city: form.get("city"),
+        state: form.get("state"),
+        zip: form.get("zip"),
+        municipio: form.get("municipio"),
+        yearsInBusiness: form.get("yearsInBusiness"),
+        revenue: form.get("revenue"),
+        activeCrews: form.get("activeCrews"),
+        bondSingle: form.get("bondSingle"),
+        canMeetVolume: form.get("canMeetVolume") === "on",
+        hasLineOfCredit: form.get("hasLineOfCredit") === "on",
+        bonded: form.get("bonded") === "on",
+        contactName: form.get("contactName"),
+        contactEmail: form.get("contactEmail"),
+        contactPhone: form.get("contactPhone"),
+        accountingName: form.get("accountingName"),
+        accountingEmail: form.get("accountingEmail"),
+        accountingPhone: form.get("accountingPhone"),
+        references: [0, 1, 2].map((i) => ({
+          name: form.get(`refName${i}`),
+          company: form.get(`refCompany${i}`),
+          phone: form.get(`refPhone${i}`),
+          email: form.get(`refEmail${i}`),
+        })),
+        documents,
+        signers,
+        attestation: form.get("attestation") === "on",
+        personalGuarantee: form.get("personalGuarantee") === "on",
+        executedAt: new Date().toISOString(),
+      };
+
       const res = await fetch("/api/submit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -194,6 +235,7 @@ export default function IntakeForm() {
       setBanner({ type: "err", msg: err.message });
     } finally {
       setSubmitting(false);
+      setUploadStatus("");
     }
   }
 
@@ -448,16 +490,13 @@ export default function IntakeForm() {
       <section className="section">
         <h2>3. {L("Documentos de Cumplimiento", "Compliance Uploads")}</h2>
         <p className="hint">{L("Solo PDF, máximo 10MB cada uno.", "PDF only, max 10MB each.")}</p>
-        <p className="todo">
-          {L(
-            "Nota: la carga de archivos aún no está conectada al almacenamiento (Fase 2 — Vercel Blob). Seleccionar archivos aquí todavía no los transmite.",
-            "Note: file uploads are not yet wired to storage (Phase 2 — Vercel Blob). Selecting files here does not yet transmit them."
-          )}
-        </p>
         {UPLOADS.map((u) => (
           <div className="field" key={u.key}>
             <label>{L(u.es, u.en)}</label>
             <input type="file" name={`file_${u.key}`} accept="application/pdf" />
+            {errors[`file_${u.key}`] && (
+              <div className="error">{errors[`file_${u.key}`]}</div>
+            )}
           </div>
         ))}
       </section>
@@ -603,6 +642,7 @@ export default function IntakeForm() {
             ? L("Enviando…", "Submitting…")
             : L("Enviar solicitud", "Submit Application")}
         </button>
+        {uploadStatus && <span className="upload-status">{uploadStatus}</span>}
       </div>
     </form>
   );

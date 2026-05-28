@@ -72,11 +72,17 @@ export async function POST(request) {
     );
   }
 
-  // TODO Phase 2: accept Vercel Blob URLs for the uploaded compliance PDFs.
-  // TODO Phase 3: forward this payload (plus blob URLs) to the n8n webhook,
-  //   which runs SAM.gov + OFAC checks and creates the Quickbase record.
+  // Compliance PDFs arrive as Vercel Blob URLs: [{ key, url, filename }].
+  const documents = Array.isArray(data.documents) ? data.documents : [];
+
+  // TODO Phase 3: forward this payload (incl. document blob URLs) to the n8n
+  //   webhook, which runs SAM.gov + OFAC checks, fetches each blob, attaches it
+  //   to the Quickbase file field, creates the record, then deletes the blobs.
   // NOTE: ACH banking is intentionally not collected here (deferred post-approval).
-  console.log("Intake submission received:", JSON.stringify(data));
+  console.log(
+    "Intake submission received:",
+    JSON.stringify({ ...data, documentCount: documents.length })
+  );
 
   return NextResponse.json({ ok: true, message: "Application received." });
 }

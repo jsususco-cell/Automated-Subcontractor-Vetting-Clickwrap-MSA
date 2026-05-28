@@ -138,6 +138,12 @@ h1 {
   padding: 4px 0;
 }
 
+.upload-status {
+  margin-left: 12px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
 .section .hint {
   color: var(--muted);
   font-size: 0.9rem;
