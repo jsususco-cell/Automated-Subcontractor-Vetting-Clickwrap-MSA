@@ -1,11 +1,18 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { upload } from "@vercel/blob/client";
 import { MSA_TITLE, MSA_TEXT_ES } from "@/lib/msa";
 
 const EIN_PATTERN = /^\d{2}-\d{7}$/;
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+
+// Anti-abuse feature flags (public env). Turnstile renders when a site key is
+// present; email verification is required when explicitly turned on.
+const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || "";
+const REQUIRE_EMAIL_VERIFICATION =
+  process.env.NEXT_PUBLIC_REQUIRE_EMAIL_VERIFICATION === "1";
 
 // Compliance documents the contractor must upload (PDF, <=10MB each).
 // `key` maps to the corresponding Quickbase file-attachment field.
@@ -36,8 +43,154 @@ export default function IntakeForm() {
   const [uploadStatus, setUploadStatus] = useState("");
   const [done, setDone] = useState(false);
 
+  // Contact email is controlled so email verification can track it.
+  const [contactEmail, setContactEmail] = useState("");
+
+  // Cloudflare Turnstile
+  const tsRef = useRef(null);
+  const tsWidgetId = useRef(null);
+  const [tsToken, setTsToken] = useState("");
+  const tsEnabled = Boolean(TURNSTILE_SITE_KEY);
+
+  // Email OTP verification
+  const [otpToken, setOtpToken] = useState("");
+  const [otpCode, setOtpCode] = useState("");
+  const [otpSent, setOtpSent] = useState(false);
+  const [emailVerified, setEmailVerified] = useState(false);
+  const [verifiedEmail, setVerifiedEmail] = useState("");
+  const [otpBusy, setOtpBusy] = useState(false);
+  const [otpMsg, setOtpMsg] = useState(null); // { type: "ok"|"err", text }
+
   // Bilingual helper: returns the string for the active language.
   const L = (es, en) => (lang === "es" ? es : en);
+
+  // Load + render the Turnstile widget once (managed mode auto-solves).
+  useEffect(() => {
+    if (!tsEnabled) return undefined;
+    const SCRIPT_ID = "cf-turnstile-script";
+    function render() {
+      if (!window.turnstile || !tsRef.current || tsWidgetId.current !== null) return;
+      tsWidgetId.current = window.turnstile.render(tsRef.current, {
+        sitekey: TURNSTILE_SITE_KEY,
+        callback: (t) => setTsToken(t),
+        "expired-callback": () => setTsToken(""),
+        "error-callback": () => setTsToken(""),
+      });
+    }
+    if (window.turnstile) {
+      render();
+      return undefined;
+    }
+    let script = document.getElementById(SCRIPT_ID);
+    if (!script) {
+      script = document.createElement("script");
+      script.id = SCRIPT_ID;
+      script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js";
+      script.async = true;
+      script.defer = true;
+      document.head.appendChild(script);
+    }
+    const iv = setInterval(() => {
+      if (window.turnstile) {
+        clearInterval(iv);
+        render();
+      }
+    }, 200);
+    return () => clearInterval(iv);
+  }, [tsEnabled]);
+
+  // Returns the current Turnstile token (empty when not enabled — the server
+  // skips verification in that case).
+  function currentTurnstileToken() {
+    if (!tsEnabled) return "";
+    if (window.turnstile && tsWidgetId.current !== null) {
+      return window.turnstile.getResponse(tsWidgetId.current) || "";
+    }
+    return tsToken || "";
+  }
+  // Force a fresh token for the next protected action (tokens are single-use).
+  function resetTurnstile() {
+    if (tsEnabled && window.turnstile && tsWidgetId.current !== null) {
+      window.turnstile.reset(tsWidgetId.current);
+      setTsToken("");
+    }
+  }
+
+  function onContactEmailChange(value) {
+    setContactEmail(value);
+    // Changing the email invalidates a prior verification.
+    if (emailVerified && value.trim() !== verifiedEmail) {
+      setEmailVerified(false);
+      setOtpSent(false);
+      setOtpToken("");
+      setOtpCode("");
+      setOtpMsg(null);
+    }
+  }
+
+  async function sendOtp() {
+    setOtpMsg(null);
+    const email = contactEmail.trim();
+    if (!EMAIL_PATTERN.test(email)) {
+      setOtpMsg({ type: "err", text: L("Ingrese un correo válido primero.", "Enter a valid email first.") });
+      return;
+    }
+    const token = currentTurnstileToken();
+    if (tsEnabled && !token) {
+      setOtpMsg({ type: "err", text: L("Complete el CAPTCHA primero.", "Complete the CAPTCHA first.") });
+      return;
+    }
+    setOtpBusy(true);
+    try {
+      const res = await fetch("/api/otp/request", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, turnstileToken: token }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || L("No se pudo enviar el código.", "Could not send the code."));
+      }
+      setOtpToken(data.token);
+      setOtpSent(true);
+      setEmailVerified(false);
+      setOtpMsg({
+        type: "ok",
+        text: data.devCode
+          ? L(`Código (dev): ${data.devCode}`, `Code (dev): ${data.devCode}`)
+          : L("Código enviado a su correo.", "Code sent to your email."),
+      });
+      resetTurnstile(); // refresh token for the final submit
+    } catch (err) {
+      setOtpMsg({ type: "err", text: err.message });
+    } finally {
+      setOtpBusy(false);
+    }
+  }
+
+  async function verifyOtpCode() {
+    setOtpMsg(null);
+    setOtpBusy(true);
+    try {
+      const res = await fetch("/api/otp/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: contactEmail.trim(), token: otpToken, code: otpCode.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || L("Código inválido o expirado.", "Invalid or expired code."));
+      }
+      setEmailVerified(true);
+      setVerifiedEmail(contactEmail.trim());
+      setOtpMsg({ type: "ok", text: L("Correo verificado ✓", "Email verified ✓") });
+    } catch (err) {
+      setEmailVerified(false);
+      setOtpMsg({ type: "err", text: err.message });
+    } finally {
+      setOtpBusy(false);
+    }
+  }
 
   function onEntityChange(value) {
     setEntityType(value);
@@ -157,6 +310,32 @@ export default function IntakeForm() {
       return;
     }
 
+    // Anti-abuse gates.
+    if (
+      REQUIRE_EMAIL_VERIFICATION &&
+      (!emailVerified || verifiedEmail !== contactEmail.trim())
+    ) {
+      setBanner({
+        type: "err",
+        msg: L(
+          "Verifique su correo de contacto antes de enviar.",
+          "Please verify your contact email before submitting."
+        ),
+      });
+      return;
+    }
+    const turnstileToken = currentTurnstileToken();
+    if (tsEnabled && !turnstileToken) {
+      setBanner({
+        type: "err",
+        msg: L(
+          "Complete la verificación de seguridad (CAPTCHA).",
+          "Please complete the security check (CAPTCHA)."
+        ),
+      });
+      return;
+    }
+
     setSubmitting(true);
     try {
       // Upload each PDF directly from the browser to Vercel Blob, which avoids
@@ -219,6 +398,10 @@ export default function IntakeForm() {
         attestation: form.get("attestation") === "on",
         personalGuarantee: form.get("personalGuarantee") === "on",
         executedAt: new Date().toISOString(),
+        // Anti-abuse tokens (stripped server-side, not stored in the record).
+        turnstileToken,
+        otpToken,
+        otpCode,
       };
 
       const res = await fetch("/api/submit", {
@@ -236,6 +419,8 @@ export default function IntakeForm() {
     } finally {
       setSubmitting(false);
       setUploadStatus("");
+      // Turnstile tokens are single-use; refresh for a potential retry.
+      resetTurnstile();
     }
   }
 
@@ -460,10 +645,67 @@ export default function IntakeForm() {
             <input type="text" name="contactName" />
           </div>
           <div className="field">
-            <label>{L("Correo electrónico", "Email")}</label>
-            <input type="email" name="contactEmail" />
+            <label>
+              {L("Correo electrónico", "Email")}
+              {REQUIRE_EMAIL_VERIFICATION && <span className="req"> *</span>}
+            </label>
+            <input
+              type="email"
+              name="contactEmail"
+              value={contactEmail}
+              onChange={(ev) => onContactEmailChange(ev.target.value)}
+            />
           </div>
         </div>
+
+        {REQUIRE_EMAIL_VERIFICATION && (
+          <div className="field">
+            {!emailVerified ? (
+              <>
+                <div className="otp-row">
+                  <button type="button" className="btn-secondary" onClick={sendOtp} disabled={otpBusy}>
+                    {otpSent
+                      ? L("Reenviar código", "Resend code")
+                      : L("Enviar código de verificación", "Send verification code")}
+                  </button>
+                  {otpSent && (
+                    <>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={6}
+                        placeholder={L("Código de 6 dígitos", "6-digit code")}
+                        value={otpCode}
+                        onChange={(ev) => setOtpCode(ev.target.value.replace(/\D/g, ""))}
+                        style={{ maxWidth: 170 }}
+                      />
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={verifyOtpCode}
+                        disabled={otpBusy || otpCode.trim().length !== 6}
+                      >
+                        {L("Verificar", "Verify")}
+                      </button>
+                    </>
+                  )}
+                </div>
+                <p className="hint">
+                  {L(
+                    "Debe verificar su correo de contacto para poder enviar la solicitud.",
+                    "You must verify your contact email to submit the application."
+                  )}
+                </p>
+              </>
+            ) : (
+              <p className="otp-ok">{L("Correo verificado ✓", "Email verified ✓")}</p>
+            )}
+            {otpMsg && (
+              <div className={otpMsg.type === "ok" ? "otp-ok" : "error"}>{otpMsg.text}</div>
+            )}
+          </div>
+        )}
+
         <div className="field">
           <label>{L("Teléfono", "Phone")}</label>
           <input type="tel" name="contactPhone" />
@@ -637,6 +879,12 @@ export default function IntakeForm() {
       </section>
 
       <div className="section">
+        {tsEnabled && (
+          <div className="field">
+            <label>{L("Verificación de seguridad", "Security check")}</label>
+            <div ref={tsRef} className="cf-turnstile" />
+          </div>
+        )}
         <button className="btn" type="submit" disabled={submitting}>
           {submitting
             ? L("Enviando…", "Submitting…")

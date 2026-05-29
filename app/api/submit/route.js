@@ -1,4 +1,9 @@
 import { NextResponse } from "next/server";
+import { verifyTurnstile } from "@/lib/turnstile";
+import { verifyOtp } from "@/lib/otp";
+
+const REQUIRE_EMAIL_VERIFICATION =
+  process.env.NEXT_PUBLIC_REQUIRE_EMAIL_VERIFICATION === "1";
 
 const REQUIRED = [
   "companyName",
@@ -72,9 +77,35 @@ export async function POST(request) {
     );
   }
 
+  // Anti-abuse: Cloudflare Turnstile (skipped if TURNSTILE_SECRET_KEY unset).
+  const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
+  const ts = await verifyTurnstile(data.turnstileToken, ip);
+  if (!ts.ok) {
+    return NextResponse.json(
+      { ok: false, error: "CAPTCHA verification failed. Please try again." },
+      { status: 400 }
+    );
+  }
+
+  // Email verification: enforced only when turned on (so the form works before a
+  // mail provider is configured). Re-verified here so a forged client state can't
+  // bypass it; the OTP is bound to the contact email.
+  if (REQUIRE_EMAIL_VERIFICATION) {
+    const otp = verifyOtp(data.contactEmail, data.otpToken, data.otpCode);
+    if (!otp.ok) {
+      return NextResponse.json(
+        { ok: false, error: "Please verify your contact email before submitting." },
+        { status: 400 }
+      );
+    }
+  }
+
   // Compliance PDFs arrive as Vercel Blob URLs: [{ key, url, filename }].
   const documents = Array.isArray(data.documents) ? data.documents : [];
   // NOTE: ACH banking is intentionally not collected here (deferred post-approval).
+
+  // Strip anti-abuse fields — they are not part of the vetting record sent to n8n.
+  const { turnstileToken, otpToken, otpCode, ...payload } = data;
 
   // Phase 3: forward the validated submission (incl. document blob URLs) to the
   // n8n webhook, which runs SAM.gov + OFAC checks, fetches each blob, attaches it
@@ -86,7 +117,7 @@ export async function POST(request) {
     // Once N8N_WEBHOOK_URL is set, this branch no longer runs.
     console.log(
       "Intake submission received (n8n not configured):",
-      JSON.stringify({ ...data, documentCount: documents.length })
+      JSON.stringify({ ...payload, documentCount: documents.length })
     );
     return NextResponse.json({ ok: true, message: "Application received." });
   }
@@ -106,7 +137,7 @@ export async function POST(request) {
           ? { "x-webhook-secret": process.env.N8N_WEBHOOK_SECRET }
           : {}),
       },
-      body: JSON.stringify(data),
+      body: JSON.stringify(payload),
       signal: controller.signal,
     });
     if (!res.ok) {

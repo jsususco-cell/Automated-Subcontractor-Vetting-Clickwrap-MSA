@@ -60,16 +60,35 @@ unset (n8n not provisioned yet) it logs and accepts, so the form still works in
 dev. On a webhook failure it returns **502** so the applicant can retry rather
 than silently dropping a submission. Contract: `n8n/README.md`.
 
-## Not yet wired (next phases)
+## Anti-abuse (Phase 2 — done)
 
-- **Phase 2 (remaining):** email verification (OTP/magic link) + CAPTCHA (Cloudflare Turnstile).
+The public form is protected by two layers, both following the "works until
+configured" pattern (no keys set → that layer is skipped so dev still works):
 
-## Environment variables (added in later phases)
+- **Cloudflare Turnstile (CAPTCHA).** The widget renders when
+  `NEXT_PUBLIC_TURNSTILE_SITE_KEY` is set; the server verifies the token in
+  `/api/submit` (and `/api/otp/request`) when `TURNSTILE_SECRET_KEY` is set.
+- **Email verification (OTP).** When `NEXT_PUBLIC_REQUIRE_EMAIL_VERIFICATION=1`,
+  the contact email must be verified with a 6-digit code before submitting.
+  It's **stateless** — no DB/KV: the server emails the code and hands the browser
+  an HMAC-signed token (`lib/otp.js`) bound to the email + a 10-min expiry, then
+  re-verifies at submit. Code delivery is via **Resend** (`lib/email.js`).
+  Routes: `/api/otp/request` (Turnstile-gated, sends the code) and
+  `/api/otp/verify` (inline check).
+
+> Until `RESEND_API_KEY` is set, the code is logged server-side; set
+> `OTP_DEV_ECHO=1` to return it in the API response for local testing (never in
+> prod). `OTP_SECRET` must be a stable secret in production.
+
+## Environment variables
 
 These go in Vercel project settings / n8n credentials — never commit them.
 
 - `N8N_WEBHOOK_URL`, `N8N_WEBHOOK_SECRET`
 - `BLOB_READ_WRITE_TOKEN` (Vercel Blob)
 - `BLOB_CLEANUP_SECRET` (shared with n8n's "Blob Cleanup" credential)
-- `TURNSTILE_SECRET_KEY`
+- `NEXT_PUBLIC_TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET_KEY` (Cloudflare Turnstile)
+- `NEXT_PUBLIC_REQUIRE_EMAIL_VERIFICATION` (`1` to require email OTP)
+- `RESEND_API_KEY`, `RESEND_FROM` (e.g. `Byrdson Services <no-reply@byrdsonservices.com>`)
+- `OTP_SECRET` (stable HMAC secret for OTP tokens), `OTP_DEV_ECHO` (dev only)
 - (n8n-side) `QUICKBASE_USER_TOKEN`, `SAM_GOV_API_KEY`, `TRADE_GOV_API_KEY`

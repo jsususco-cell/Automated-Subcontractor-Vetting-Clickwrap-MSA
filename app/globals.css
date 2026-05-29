@@ -267,6 +267,25 @@ select {
   font-style: italic;
 }
 
+.otp-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.otp-row input {
+  width: auto;
+}
+
+.otp-ok {
+  color: var(--ok);
+  font-weight: 600;
+  font-size: 0.9rem;
+  margin: 4px 0 0;
+}
+
 @media (max-width: 600px) {
   .row {
     grid-template-columns: 1fr;
