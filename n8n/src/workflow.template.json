@@ -133,7 +133,7 @@
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={{ { \"ok\": $json.ok, \"recordId\": $json.quickbaseRecordId, \"flagged\": $json.flagged, \"screening\": $json.screening } }}",
+        "responseBody": "={{ { \"ok\": $json.ok, \"recordId\": $json.quickbaseRecordId, \"flagged\": $json.flagged, \"lineErrors\": $json.quickbaseLineErrors, \"screening\": $json.screening } }}",
         "options": {}
       },
       "id": "99999999-9999-4999-8999-999999999999",

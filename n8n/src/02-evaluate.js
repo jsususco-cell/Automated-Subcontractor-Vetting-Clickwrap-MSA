@@ -5,8 +5,21 @@ const prep = $('Config & Prepare').first().json;
 const p = prep.body;
 const cfg = prep.config;
 
-const sam = $('SAM.gov Exclusions').first().json || {};
-const csl = $('Trade.gov CSL').first().json || {};
+// The HTTP nodes may hand us either a parsed object or, when the API returns
+// JSON under a non-JSON content type, the raw body as a string under `.data`.
+// Normalise both shapes.
+function parseBody(x) {
+  if (x == null) return {};
+  if (typeof x === 'string') {
+    try { return JSON.parse(x); } catch (e) { return {}; }
+  }
+  if (typeof x.data === 'string') {
+    try { return JSON.parse(x.data); } catch (e) { return {}; }
+  }
+  return x;
+}
+const sam = parseBody($('SAM.gov Exclusions').first().json);
+const csl = parseBody($('Trade.gov CSL').first().json);
 
 // SAM exclusions API returns { totalRecords, excludedEntity: [...] }.
 const samTotal = Number(
