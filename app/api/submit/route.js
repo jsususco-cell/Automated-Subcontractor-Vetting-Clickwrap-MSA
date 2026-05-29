@@ -74,15 +74,59 @@ export async function POST(request) {
 
   // Compliance PDFs arrive as Vercel Blob URLs: [{ key, url, filename }].
   const documents = Array.isArray(data.documents) ? data.documents : [];
-
-  // TODO Phase 3: forward this payload (incl. document blob URLs) to the n8n
-  //   webhook, which runs SAM.gov + OFAC checks, fetches each blob, attaches it
-  //   to the Quickbase file field, creates the record, then deletes the blobs.
   // NOTE: ACH banking is intentionally not collected here (deferred post-approval).
-  console.log(
-    "Intake submission received:",
-    JSON.stringify({ ...data, documentCount: documents.length })
-  );
+
+  // Phase 3: forward the validated submission (incl. document blob URLs) to the
+  // n8n webhook, which runs SAM.gov + OFAC checks, fetches each blob, attaches it
+  // to the Quickbase file field, creates the record, then deletes the blobs.
+  // See n8n/README.md for the contract.
+  const webhookUrl = process.env.N8N_WEBHOOK_URL;
+  if (!webhookUrl) {
+    // n8n isn't provisioned yet — log and accept so the form still works in dev.
+    // Once N8N_WEBHOOK_URL is set, this branch no longer runs.
+    console.log(
+      "Intake submission received (n8n not configured):",
+      JSON.stringify({ ...data, documentCount: documents.length })
+    );
+    return NextResponse.json({ ok: true, message: "Application received." });
+  }
+
+  // n8n's "Respond to Webhook" node replies only after the Quickbase write, so
+  // give it a generous timeout. (If latency becomes an issue, switch the n8n
+  // workflow to respond immediately and process asynchronously.)
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 25000);
+  try {
+    const res = await fetch(webhookUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        // Matches the Webhook node's Header Auth credential in n8n.
+        ...(process.env.N8N_WEBHOOK_SECRET
+          ? { "x-webhook-secret": process.env.N8N_WEBHOOK_SECRET }
+          : {}),
+      },
+      body: JSON.stringify(data),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      throw new Error(`n8n responded ${res.status}`);
+    }
+  } catch (error) {
+    // The applicant already accepted the MSA and uploaded files, so surface the
+    // failure and let them retry rather than silently dropping the submission.
+    console.error("Failed to forward submission to n8n:", error);
+    return NextResponse.json(
+      {
+        ok: false,
+        error:
+          "We received your information but could not complete processing. Please try again in a moment.",
+      },
+      { status: 502 }
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
 
   return NextResponse.json({ ok: true, message: "Application received." });
 }

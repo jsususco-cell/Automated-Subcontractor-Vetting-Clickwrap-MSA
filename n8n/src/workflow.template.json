@@ -1,0 +1,190 @@
+{
+  "name": "Subcontractor Vetting — Screen & Record",
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "subcontractor-vetting",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "11111111-1111-4111-8111-111111111111",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 320],
+      "webhookId": "subcontractor-vetting-webhook",
+      "credentials": {
+        "httpHeaderAuth": { "id": "REPLACE_WEBHOOK_SECRET", "name": "Intake Webhook Secret" }
+      }
+    },
+    {
+      "parameters": { "mode": "runOnceForAllItems", "jsCode": "@@CONFIG_JS@@" },
+      "id": "22222222-2222-4222-8222-222222222222",
+      "name": "Config & Prepare",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 320]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Config & Prepare').first().json.config.samUrl }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "exclusionName", "value": "={{ $('Config & Prepare').first().json.body.companyName }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "33333333-3333-4333-8333-333333333333",
+      "name": "SAM.gov Exclusions",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 320],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "httpQueryAuth": { "id": "REPLACE_SAM_KEY", "name": "SAM.gov api_key" }
+      }
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Config & Prepare').first().json.config.cslUrl }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "name", "value": "={{ $('Config & Prepare').first().json.body.companyName }}" },
+            { "name": "fuzzy_name", "value": "true" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "44444444-4444-4444-8444-444444444444",
+      "name": "Trade.gov CSL",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 320],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "httpHeaderAuth": { "id": "REPLACE_CSL_KEY", "name": "Trade.gov subscription-key" }
+      }
+    },
+    {
+      "parameters": { "mode": "runOnceForAllItems", "jsCode": "@@EVALUATE_JS@@" },
+      "id": "55555555-5555-4555-8555-555555555555",
+      "name": "Evaluate Screening",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 320]
+    },
+    {
+      "parameters": { "mode": "runOnceForAllItems", "jsCode": "@@BUILD_JS@@" },
+      "id": "66666666-6666-4666-8666-666666666666",
+      "name": "Build Quickbase Record",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 320]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.quickbase.com/v1/records",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "QB-Realm-Hostname", "value": "={{ $('Config & Prepare').first().json.config.quickbaseRealmHost }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.qbBody }}",
+        "options": {}
+      },
+      "id": "77777777-7777-4777-8777-777777777777",
+      "name": "Quickbase: Create Record",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1560, 320],
+      "credentials": {
+        "httpHeaderAuth": { "id": "REPLACE_QB_TOKEN", "name": "Quickbase Authorization" }
+      }
+    },
+    {
+      "parameters": { "mode": "runOnceForAllItems", "jsCode": "@@SHAPE_JS@@" },
+      "id": "88888888-8888-4888-8888-888888888888",
+      "name": "Shape Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1780, 320]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"ok\": $json.ok, \"recordId\": $json.quickbaseRecordId, \"flagged\": $json.flagged, \"screening\": $json.screening } }}",
+        "options": {}
+      },
+      "id": "99999999-9999-4999-8999-999999999999",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2000, 320]
+    },
+    {
+      "parameters": { "mode": "runOnceForAllItems", "jsCode": "@@SPLIT_JS@@" },
+      "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "name": "Split Documents",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2220, 320]
+    },
+    {
+      "parameters": {
+        "method": "DELETE",
+        "url": "={{ $('Config & Prepare').first().json.config.appBaseUrl + '/api/blob/delete' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "url", "value": "={{ $json.url }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      "name": "Delete Staging Blob",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2440, 320],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "httpHeaderAuth": { "id": "REPLACE_CLEANUP_SECRET", "name": "Blob Cleanup Secret" }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": { "main": [[{ "node": "Config & Prepare", "type": "main", "index": 0 }]] },
+    "Config & Prepare": { "main": [[{ "node": "SAM.gov Exclusions", "type": "main", "index": 0 }]] },
+    "SAM.gov Exclusions": { "main": [[{ "node": "Trade.gov CSL", "type": "main", "index": 0 }]] },
+    "Trade.gov CSL": { "main": [[{ "node": "Evaluate Screening", "type": "main", "index": 0 }]] },
+    "Evaluate Screening": { "main": [[{ "node": "Build Quickbase Record", "type": "main", "index": 0 }]] },
+    "Build Quickbase Record": { "main": [[{ "node": "Quickbase: Create Record", "type": "main", "index": 0 }]] },
+    "Quickbase: Create Record": { "main": [[{ "node": "Shape Response", "type": "main", "index": 0 }]] },
+    "Shape Response": { "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]] },
+    "Respond to Webhook": { "main": [[{ "node": "Split Documents", "type": "main", "index": 0 }]] },
+    "Split Documents": { "main": [[{ "node": "Delete Staging Blob", "type": "main", "index": 0 }]] }
+  }
+}
