@@ -8,7 +8,7 @@ const config = {
   quickbaseTableId: 'bv32ejcgp',
   requiredBondThreshold: 50000,
   // --- App callback used for blob cleanup (DELETE /api/blob/delete) ---
-  appBaseUrl: 'https://your-app.vercel.app',
+  appBaseUrl: 'https://automated-subcontractor-vetting-cli.vercel.app',
   // --- Federal screening endpoints ---
   samUrl: 'https://api.sam.gov/entity-information/v4/exclusions',
   cslUrl: 'https://data.trade.gov/consolidated_screening_list/v1/search',
