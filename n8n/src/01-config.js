@@ -31,9 +31,12 @@ const config = {
     dacoComplaints: 37, materialLawsuits: 38, screeningIncomplete: 70,
   },
   // File-attachment FIDs, keyed by the upload key from the intake form.
+  // These are Quickbase "File Attachment" fields (created 2026-06-02). The old
+  // 50-56 were URL fields that only stored the filename text (a dead link), so
+  // they were replaced by real attachment fields 81-87.
   fileFieldMap: {
-    suri: 50, crim: 51, patenteAsume: 52, coi: 53, cfse: 54, daco: 55,
-    financials: 56,
+    suri: 81, crim: 82, patenteAsume: 83, coi: 84, cfse: 85, daco: 86,
+    financials: 87,
   },
 };
 
