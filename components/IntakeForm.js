@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { upload } from "@vercel/blob/client";
 import { MSA_TITLE, MSA_TEXT_ES } from "@/lib/msa";
+import SignaturePad from "@/components/SignaturePad";
 
 const EIN_PATTERN = /^\d{2}-\d{7}$/;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -92,10 +93,23 @@ function MsaContent({ text }) {
   return out;
 }
 
+// Converts a PNG data URL (from the signature pad) into a File for upload.
+function dataUrlToFile(dataUrl, filename) {
+  const [head, body] = dataUrl.split(",");
+  const mime = (head.match(/data:(.*?);/) || [])[1] || "image/png";
+  const binary = atob(body);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new File([bytes], filename, { type: mime });
+}
+
 export default function IntakeForm() {
   const [lang, setLang] = useState("es");
   const [entityType, setEntityType] = useState("");
-  const [signers, setSigners] = useState([{ name: "", title: "" }]);
+  const [signers, setSigners] = useState([
+    { id: 1, name: "", title: "", signature: "" },
+  ]);
+  const nextSignerId = useRef(2);
   const [errors, setErrors] = useState({});
   const [banner, setBanner] = useState(null);
   const [submitting, setSubmitting] = useState(false);
@@ -282,7 +296,10 @@ export default function IntakeForm() {
     );
   }
   function addSigner() {
-    setSigners((prev) => [...prev, { name: "", title: "" }]);
+    setSigners((prev) => [
+      ...prev,
+      { id: nextSignerId.current++, name: "", title: "", signature: "" },
+    ]);
   }
   function removeSigner(i) {
     setSigners((prev) => (prev.length > 1 ? prev.filter((_, idx) => idx !== i) : prev));
@@ -341,6 +358,11 @@ export default function IntakeForm() {
         e[`signer${i}`] = L(
           "Nombre legal y título son obligatorios.",
           "Full legal name and title are required."
+        );
+      } else if (!s.signature) {
+        e[`signer${i}`] = L(
+          "Debe firmar en el recuadro.",
+          "Please sign in the box."
         );
       }
     });
@@ -436,6 +458,35 @@ export default function IntakeForm() {
         });
         documents.push({ key, url: blob.url, filename: file.name });
       }
+
+      // Upload each drawn signature (PNG data URL) to Blob; keep the URL on the
+      // signer. The printed name + signature URL travel together in the signers
+      // JSON written to Quickbase — no schema change needed.
+      const signersWithUrls = [];
+      for (let i = 0; i < signers.length; i++) {
+        const s = signers[i];
+        let signatureUrl = s.signature;
+        if (typeof s.signature === "string" && s.signature.startsWith("data:")) {
+          setUploadStatus(
+            L(
+              `Subiendo firma ${i + 1} de ${signers.length}…`,
+              `Uploading signature ${i + 1} of ${signers.length}…`
+            )
+          );
+          const file = dataUrlToFile(s.signature, `signature-${i + 1}.png`);
+          const sigBlob = await upload(file.name, file, {
+            access: "public",
+            handleUploadUrl: "/api/blob/upload",
+            clientPayload: JSON.stringify({ kind: "signature" }),
+          });
+          signatureUrl = sigBlob.url;
+        }
+        signersWithUrls.push({
+          name: s.name,
+          title: s.title,
+          signature: signatureUrl,
+        });
+      }
       setUploadStatus("");
 
       // ACH banking is intentionally NOT collected here (deferred to post-approval).
@@ -472,7 +523,7 @@ export default function IntakeForm() {
           email: form.get(`refEmail${i}`),
         })),
         documents,
-        signers,
+        signers: signersWithUrls,
         attestation: form.get("attestation") === "on",
         personalGuarantee: form.get("personalGuarantee") === "on",
         executedAt: new Date().toISOString(),
@@ -941,11 +992,14 @@ export default function IntakeForm() {
         <p className="hint">{signerInstruction()}</p>
 
         {signers.map((s, i) => (
-          <div className="signer-row" key={i}>
+          <div className="signer-row" key={s.id}>
             <div className="row">
               <div className="field">
                 <label>
-                  {L("Firma (nombre legal completo)", "Signature (Full Legal Name)")}{" "}
+                  {L(
+                    "Nombre legal completo (en letra de molde)",
+                    "Full Legal Name (printed)"
+                  )}{" "}
                   <span className="req">*</span>
                 </label>
                 <input
@@ -964,6 +1018,19 @@ export default function IntakeForm() {
                   onChange={(ev) => updateSigner(i, "title", ev.target.value)}
                 />
               </div>
+            </div>
+            <div className="field sig-field">
+              <label>
+                {L("Firma", "Signature")} <span className="req">*</span>
+              </label>
+              <SignaturePad
+                clearLabel={L("Borrar", "Clear")}
+                hint={L(
+                  "Firme aquí con el mouse o el dedo",
+                  "Sign here with your mouse or finger"
+                )}
+                onChange={(dataUrl) => updateSigner(i, "signature", dataUrl)}
+              />
             </div>
             {errors[`signer${i}`] && <div className="error">{errors[`signer${i}`]}</div>}
             {entityType === "partnership" && signers.length > 1 && (

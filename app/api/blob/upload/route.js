@@ -12,7 +12,8 @@ export async function POST(request) {
       request,
       body,
       onBeforeGenerateToken: async (pathname, clientPayload) => ({
-        allowedContentTypes: ["application/pdf"],
+        // PDFs are the compliance docs; PNG is the drawn signature image.
+        allowedContentTypes: ["application/pdf", "image/png"],
         maximumSizeInBytes: 10 * 1024 * 1024,
         addRandomSuffix: true,
         tokenPayload: clientPayload ?? null,

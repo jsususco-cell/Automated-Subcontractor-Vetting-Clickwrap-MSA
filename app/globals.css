@@ -203,6 +203,65 @@ h1 {
   background: #f7f9fc;
 }
 
+.sig-field {
+  margin-top: 4px;
+}
+
+.sig-canvas-wrap {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.sig-canvas {
+  display: block;
+  width: 100%;
+  height: 140px;
+  touch-action: none;
+  cursor: crosshair;
+}
+
+/* Faint signature baseline guide (overlay only — not part of the saved image). */
+.sig-canvas-wrap::after {
+  content: "";
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 32px;
+  border-bottom: 1px solid #dde3ec;
+  pointer-events: none;
+}
+
+.sig-placeholder {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 38px;
+  text-align: center;
+  color: #aab3c2;
+  font-size: 0.85rem;
+  pointer-events: none;
+}
+
+.sig-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  min-height: 22px;
+  margin-top: 6px;
+}
+
+.sig-state.signed {
+  color: var(--ok);
+  font-weight: 700;
+}
+
+.sig-clear {
+  color: var(--brand-accent-dk);
+}
+
 .field {
   margin-bottom: 16px;
 }
