@@ -1,127 +1,114 @@
 # n8n Orchestration — Screen & Record
 
-This folder holds the **importable n8n workflow** that turns an intake submission
-into a screened, scored Quickbase record.
+This folder holds the **n8n workflow** that turns an intake submission into a
+screened, scored, document-complete Quickbase record. It is **step 6** of the
+end-to-end system (see the root `README.md` for the full picture).
 
-- `subcontractor-vetting.workflow.json` — **import this** into n8n.
-- `src/` — the editable sources (the workflow JSON is assembled from these; see
-  [Regenerating](#regenerating-the-workflow-json) at the bottom). Edit here, not
-  in the big JSON, when you want to change a Code node.
+- `subcontractor-vetting.workflow.json` — the importable workflow (assembled from
+  `src/`; do not hand-edit).
+- `src/` — the editable Code-node sources. Edit here, then regenerate the JSON
+  (see [Regenerating](#regenerating-the-workflow-json)).
 
-> **Status:** drafted against the locked architecture, but **nothing is
-> provisioned yet** (no n8n instance, Quickbase app, or API keys). Every secret
-> is a credential placeholder and every Quickbase field ID is a dummy number you
-> must replace. It will not run end-to-end until the setup below is done.
+> **Status: LIVE & verified.** Provisioned at **https://n8n.byrdsonservices.com**,
+> writing to Quickbase app `buskqh26r` / table `bv32ejcgp`. The full chain
+> (auth → SAM → OFAC → build → Quickbase create → respond → blob cleanup) has been
+> verified end-to-end against production, with real downloadable document
+> attachments. The notes below document how it works and how to maintain it.
 
 ## What it does
 
 ```
-Webhook (POST, header-auth)
-  → Config & Prepare        (holds all non-secret config + Quickbase FID map)
-  → SAM.gov Exclusions      (GET api.sam.gov .../v4/exclusions?exclusionName=)
-  → Trade.gov CSL           (GET data.trade.gov .../v1/search?name=  — OFAC etc.)
-  → Evaluate Screening      (turns both results into Quickbase scoring INPUTS)
-  → Build Quickbase Record  (fetches each Blob PDF, base64-encodes, builds body)
-  → Quickbase: Create Record(POST api.quickbase.com/v1/records)
-  → Shape Response
-  → Respond to Webhook      (returns { ok, recordId, flagged, screening })
-  → Split Documents → Delete Staging Blob  (cleans up Vercel Blobs after the fact)
+Webhook (POST, header-auth: x-webhook-secret)
+  → Config & Prepare         (non-secret config + Quickbase FID map)
+  → SAM.gov Exclusions       (GET api.sam.gov .../v4/exclusions?exclusionName=)
+  → Trade.gov CSL            (GET data.trade.gov .../v1/search?name=  — OFAC + BIS + State)
+  → Evaluate Screening       (turns both results into Quickbase scoring INPUTS)
+  → Build Quickbase Record   (fetches each Blob PDF, base64-attaches it)
+  → Quickbase: Create Record (POST api.quickbase.com/v1/records)
+  → Shape Response           (success = createdRecordIds, NOT HTTP status)
+  → Respond to Webhook       (returns { ok, recordId, flagged, screening })
+  → Split Documents → Delete Staging Blob   (cleans up the staged Vercel Blobs)
 ```
 
-**Important design point:** the **0–100 score is computed by Quickbase**, not by
-n8n. n8n only populates the *input* fields the Quickbase formula reads (see
-[Scoring](#scoring-quickbase-side)). This matches the locked decision to keep
-scoring as a Quickbase Formula-Numeric field.
+**The 0–100 score is computed by Quickbase**, not n8n. n8n only populates the
+*input* fields the Quickbase Formula-Numeric score reads (see
+[Scoring](#scoring-quickbase-side)).
 
-## 1. Import
+## The input contract
 
-n8n → **Workflows → Import from File** → pick
-`subcontractor-vetting.workflow.json`. You'll see "credential not set" warnings
-on five nodes — that's expected; create them next.
-
-## 2. Create the five credentials
-
-| Node | Credential type | Field/header name | Value |
-|------|-----------------|-------------------|-------|
-| **Webhook** | Header Auth | `x-webhook-secret` | a random shared secret (also set as `N8N_WEBHOOK_SECRET` in the app) |
-| **SAM.gov Exclusions** | Query Auth | `api_key` | your SAM.gov public API key |
-| **Trade.gov CSL** | Header Auth | `subscription-key` | your Trade.gov Data Services key |
-| **Quickbase: Create Record** | Header Auth | `Authorization` | `QB-USER-TOKEN xxxxxxxxx` (literally that prefix + your user token) |
-| **Delete Staging Blob** | Header Auth | `x-cleanup-secret` | random secret (also set as `BLOB_CLEANUP_SECRET` in the app) |
-
-Getting the keys: SAM.gov — register at https://open.gsa.gov/api/exclusions-api/.
-CSL — subscribe at https://developer.trade.gov/ (the key is on your profile;
-it goes in the `subscription-key` **header**, not a query param). Quickbase user
-token — https://help.quickbase.com/ → User Token.
-
-## 3. Edit the Config node
-
-Open **Config & Prepare** and set the real values at the top:
-
-- `quickbaseRealmHost` → e.g. `byrdson.quickbase.com`
-- `quickbaseTableId` → the table DBID (the `bxxxxxxx` in the table URL)
-- `appBaseUrl` → the deployed Vercel URL (used for blob cleanup callback)
-- `requiredBondThreshold` → the bond threshold your scoring uses (default 50000)
-- `fieldMap` → **replace every number** with the real Quickbase FID for that
-  field (Quickbase → table → **Settings → Fields** lists each field's ID)
-- `fileFieldMap` → the FIDs of the seven **File Attachment** fields, keyed by the
-  intake form's upload keys (`suri`, `crim`, `patenteAsume`, `coi`, `cfse`,
-  `daco`, `financials`)
-
-## 4. Wire the app to the webhook (the remaining glue)
-
-After **Save → Activate**, n8n shows the production webhook URL
-(`https://<your-n8n>/webhook/subcontractor-vetting`). The app's `/api/submit`
-must POST the submission to it. That forwarding is **not yet in the app** — it's
-the small next step. The contract the workflow already expects:
-
-```js
-// in app/api/submit/route.js, after validation succeeds:
-await fetch(process.env.N8N_WEBHOOK_URL, {
-  method: "POST",
-  headers: {
-    "Content-Type": "application/json",
-    "x-webhook-secret": process.env.N8N_WEBHOOK_SECRET, // matches the Webhook cred
-  },
-  body: JSON.stringify(data), // the exact payload IntakeForm builds
-});
-```
-
-The webhook reads the submission from `$json.body`, so the payload is the intake
-form's JSON as-is: `companyName, trade, entityType, ownerName, ein,
+The app's `/api/submit` POSTs the intake JSON as-is; the webhook reads it from
+`$json.body`. Fields: `companyName, trade, entityType, ownerName, ein,
 licenseNumber, dacoReg, streetAddress, city, state, zip, municipio,
 yearsInBusiness, revenue, activeCrews, bondSingle, canMeetVolume,
-hasLineOfCredit, bonded, contact*, accounting*, references[], signers[],
-documents[{key,url,filename}], attestation, personalGuarantee, executedAt`.
+hasLineOfCredit, bonded, contact*, accounting*, references[],
+signers[{name,title,signature}], documents[{key,url,filename}], attestation,
+personalGuarantee, executedAt`.
 
-### App env vars (Vercel project settings)
+## Maintaining the LIVE workflow (read this first)
 
-- `N8N_WEBHOOK_URL` — the production webhook URL
-- `N8N_WEBHOOK_SECRET` — same value as the Webhook Header Auth credential
-- `BLOB_CLEANUP_SECRET` — same value as the Blob Cleanup Header Auth credential
-- `BLOB_READ_WRITE_TOKEN` — set automatically when you connect a Blob store
+- **For small config changes** (e.g. an FID, `appBaseUrl`), edit the
+  **Config & Prepare** node directly in the n8n UI and Save. Reload the canvas
+  first so it reflects current server state.
+- **⚠️ Do NOT re-import to patch the live instance.** The importable JSON carries
+  placeholder credential references (`REPLACE_*`), so importing it **unlinks all
+  five credentials** and may spawn a duplicate, inactive workflow. Re-import is
+  for standing up a *fresh* instance only.
+- **⚠️ Canvas "Save" can clobber code.** If Code-node changes were pushed via the
+  n8n API while a browser canvas was open/stale, hitting Save writes the stale
+  browser copy back. Open the workflow fresh before editing. (Editing
+  **Credentials** is always safe.)
+
+## Credentials (five)
+
+| Node | Type | Field / header | Value |
+|------|------|----------------|-------|
+| **Webhook** | Header Auth | `x-webhook-secret` | shared secret, also `N8N_WEBHOOK_SECRET` in the app |
+| **SAM.gov Exclusions** | Query Auth | `api_key` | SAM.gov API key (register at open.gsa.gov) — **live** |
+| **Trade.gov CSL** | Header Auth | `subscription-key` | Trade.gov key (developer.trade.gov → Products → Data Services Platform APIs → Profile) — **live** |
+| **Quickbase: Create Record** | Header Auth | `Authorization` | `QB-USER-TOKEN <token>` (literal prefix + your token) |
+| **Delete Staging Blob** | Header Auth | `x-cleanup-secret` | shared secret, also `BLOB_CLEANUP_SECRET` in the app |
+
+> Trade.gov CSL covers **OFAC** (Treasury sanctions / SDN) plus Commerce (BIS)
+> and State lists in one call — you don't register with OFAC separately. The key
+> is free and goes in the `subscription-key` **header**, not a query param.
+
+## Config & Prepare node
+
+Holds all non-secret config (secrets live in credentials). Current live values:
+
+- `quickbaseRealmHost` → `byrdsonservices.quickbase.com`
+- `quickbaseTableId` → `bv32ejcgp` (app `buskqh26r`)
+- `appBaseUrl` → `https://automated-subcontractor-vetting-cli.vercel.app`
+  (used for the blob-cleanup callback)
+- `requiredBondThreshold` → `50000`
+- `samUrl` → `https://api.sam.gov/entity-information/v4/exclusions`
+- `cslUrl` → `https://data.trade.gov/consolidated_screening_list/v1/search`
+- `fieldMap` → real Quickbase FIDs for every data field. **Formula fields are
+  excluded** from the write map (Quickbase derives them): `41` Disqualifier Flag,
+  `57` Vetting Score, `58` Recommendation.
+- `fileFieldMap` → the seven **File Attachment** FIDs, keyed by the intake upload
+  keys: `suri:81, crim:82, patenteAsume:83, coi:84, cfse:85, daco:86,
+  financials:87`. (These replaced the original URL-type fields 50–56, which could
+  only hold filename text and produced dead links.)
 
 ## Scoring (Quickbase side)
 
-Create these fields in Quickbase, then add the official §3 formula as a
-**Formula - Numeric** field. The workflow fills the *automated* inputs; the
-*manual* inputs default conservatively so the initial score stays low until a
-compliance reviewer verifies the PR-side items (PR govt portals can't be
-scraped, by project policy).
+The federal screens (SAM, OFAC) are **pass/fail gates** — a hit sets the
+Disqualifier Flag and overrides the score; they add no points. The 0–100 score is
+a Quickbase **Formula-Numeric** field. n8n fills the *automated* inputs; the
+*manual* PR-compliance inputs default conservatively so the score stays low until
+a reviewer verifies them (PR govt portals can't be scraped — project policy).
 
 | Quickbase input | Set by | How |
 |-----------------|--------|-----|
-| Can Meet Volume, Has Line of Credit, Bonded, Bond Single | n8n | from form |
+| Can Meet Volume, Has Line of Credit, Bonded, Bond Single | n8n | from the form |
 | Financials Uploaded, CFSE Current | n8n | derived from which PDFs were uploaded |
-| SAM Exclusion Hit, OFAC Hit, Disqualifier Flag, Screening Incomplete | n8n | from the federal checks |
+| SAM Exclusion Hit, OFAC Hit, Screening Incomplete | n8n | from the federal checks |
 | MSA Digitally Signed | n8n | from the attestation checkbox |
-| Meets Insurance Limits | **manual** | reviewer verifies the COI |
-| Verified References | **manual** | reviewer calls references |
-| Entity Standing | **manual** | reviewer confirms (defaults `Pending Review`) |
-| DACO Complaints, Material Lawsuits | **manual** | reviewer checks PR portals |
-| Required Bond Threshold | Quickbase | a constant field / default |
+| Meets Insurance Limits, Verified References, Entity Standing, DACO Complaints, Material Lawsuits | **manual** | reviewer verifies (default low) |
+| Required Bond Threshold | Quickbase | constant (50000) |
 
-The formula (from the project blueprint, paste verbatim):
+The formula (Formula-Numeric field, from the project blueprint):
 
 ```
 var Number capacity  = If([Can Meet Volume]=true, 25, 0);
@@ -144,31 +131,40 @@ Max(0,
 ## Caveats / things to know
 
 - **Name-match false positives.** SAM/CSL are searched by company name, so a hit
-  sets `Disqualifier Flag` for a human to clear — it is *not* an automatic
+  sets the Disqualifier Flag for a human to clear — it is *not* an automatic
   permanent rejection. Tighten with EIN/UEI later if desired.
-- **Failed check ≠ clear.** If either screening call errors, `Screening
-  Incomplete` is set so the record is reviewed rather than passed silently.
-- **Code node helpers.** `Build Quickbase Record` uses
-  `this.helpers.httpRequest` to fetch the PDFs; this is available in current n8n.
-  If your instance blocks it, swap to a Split-Out → HTTP (binary) → base64 chain.
-- **Cleanup runs after the response.** Blobs are deleted *after* the webhook
-  responds. If a delete fails the user still succeeds; orphaned staging blobs are
-  low-harm and can be GC'd later.
-- **Quickbase base64** must have no newlines — `Buffer.toString('base64')`
-  already produces a single line, so that's handled.
+- **Failed check ≠ clear.** If a screening call errors or returns an unexpected
+  shape, `Screening Incomplete` is set so the record is reviewed, not passed.
+- **Quickbase 200 ≠ created.** Quickbase returns HTTP 200 even when a row is
+  rejected (it reports `metadata.lineErrors`), so success keys off
+  `createdRecordIds`. Example: a duplicate **EIN** (a unique field) is rejected
+  with `ok:false`.
+- **Documents are real attachments.** `Build Quickbase Record` fetches each public
+  Blob PDF via `this.helpers.httpRequest` and base64-attaches it to the File
+  Attachment field — Quickbase stores the bytes (downloadable from Quickbase).
+  Base64 must be single-line; `Buffer.toString('base64')` already is.
+- **Cleanup runs after the response.** The staged *document* blobs are deleted via
+  the app's `/api/blob/delete` callback. Signature blobs are kept (they're the
+  signature of record). A failed delete is low-harm.
 
 ## Regenerating the workflow JSON
 
 If you edit anything in `src/`, rebuild the importable file (PowerShell, from the
-repo root). This JSON-encodes each `src/*.js` body into the template safely:
+repo root). This JSON-encodes each `src/*.js` body into the template safely and
+normalizes line endings to `\n`:
 
 ```powershell
-$dir = "n8n"
-function ReadU($p){ [IO.File]::ReadAllText($p, [Text.Encoding]::UTF8) }
-$tpl = ReadU "$dir/src/workflow.template.json"
+$root = "n8n"
+function ReadU($p){ ([IO.File]::ReadAllText($p, [Text.Encoding]::UTF8)).Replace("`r`n","`n") }
+$tpl = ReadU "$root/src/workflow.template.json"
 $map = [ordered]@{ '"@@CONFIG_JS@@"'='01-config.js'; '"@@EVALUATE_JS@@"'='02-evaluate.js';
   '"@@BUILD_JS@@"'='03-build.js'; '"@@SHAPE_JS@@"'='04-shape.js'; '"@@SPLIT_JS@@"'='05-split.js' }
-foreach ($t in $map.Keys) { $tpl = $tpl.Replace($t, (ReadU "$dir/src/$($map[$t])" | ConvertTo-Json)) }
+foreach ($t in $map.Keys) { $tpl = $tpl.Replace($t, (ReadU "$root/src/$($map[$t])" | ConvertTo-Json)) }
 $null = $tpl | ConvertFrom-Json   # validate
-[IO.File]::WriteAllText("$dir/subcontractor-vetting.workflow.json", $tpl, (New-Object Text.UTF8Encoding($false)))
+[IO.File]::WriteAllText("$root/subcontractor-vetting.workflow.json", $tpl, (New-Object Text.UTF8Encoding($false)))
 ```
+
+Remember: regenerating the JSON updates the repo (source of truth), but the
+**live** workflow only picks up Code-node changes if you re-import (resets
+credentials) or paste the change into the node directly — see
+[Maintaining](#maintaining-the-live-workflow-read-this-first).
