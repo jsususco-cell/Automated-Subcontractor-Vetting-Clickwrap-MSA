@@ -352,6 +352,32 @@ select:focus {
   padding: 14px 16px;
 }
 
+/* Binding-execution checkboxes are locked until the MSA is read in full. */
+.attest.locked {
+  opacity: 0.6;
+}
+
+.check input:disabled,
+.check input:disabled + label {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* "Scroll to the end" / "read" indicator under the MSA box. */
+.msa-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--danger);
+}
+
+.msa-status.read {
+  color: var(--ok);
+}
+
 /* ===================== Feedback ===================== */
 .error {
   color: var(--danger);

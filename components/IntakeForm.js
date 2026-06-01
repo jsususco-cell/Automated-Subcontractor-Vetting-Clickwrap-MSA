@@ -43,6 +43,11 @@ export default function IntakeForm() {
   const [uploadStatus, setUploadStatus] = useState("");
   const [done, setDone] = useState(false);
 
+  // The full MSA must be scrolled to the end before the binding-execution
+  // checkboxes can be enabled/checked.
+  const msaRef = useRef(null);
+  const [msaRead, setMsaRead] = useState(false);
+
   // Contact email is controlled so email verification can track it.
   const [contactEmail, setContactEmail] = useState("");
 
@@ -98,6 +103,20 @@ export default function IntakeForm() {
     }, 200);
     return () => clearInterval(iv);
   }, [tsEnabled]);
+
+  // If the agreement is short enough to fit without scrolling, there's nothing
+  // to scroll — treat it as read once mounted. Otherwise it's marked read when
+  // the user scrolls to the bottom (see onMsaScroll).
+  useEffect(() => {
+    const el = msaRef.current;
+    if (el && el.scrollHeight - el.clientHeight <= 8) setMsaRead(true);
+  }, []);
+
+  function onMsaScroll() {
+    const el = msaRef.current;
+    if (!el || msaRead) return;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 8) setMsaRead(true);
+  }
 
   // Returns the current Turnstile token (empty when not enabled — the server
   // skips verification in that case).
@@ -787,20 +806,44 @@ export default function IntakeForm() {
         </h2>
         <p className="hint">
           {L(
-            "Lea el acuerdo completo a continuación (versión oficial en español). Debe aceptarlo para enviar.",
-            "Read the full agreement below (official Spanish version). You must accept it to submit."
+            "Lea el acuerdo completo a continuación (versión oficial en español). Desplácese hasta el final para poder firmar.",
+            "Read the full agreement below (official Spanish version). Scroll to the end to enable signing."
           )}
         </p>
-        <div className="msa-box">{MSA_TEXT_ES}</div>
+        <div className="msa-box" ref={msaRef} onScroll={onMsaScroll} tabIndex={0}>
+          {MSA_TEXT_ES}
+        </div>
+        <div className={msaRead ? "msa-status read" : "msa-status"}>
+          {msaRead
+            ? L("✓ Ha leído el acuerdo completo.", "✓ You have read the full agreement.")
+            : L(
+                "↓ Desplácese hasta el final del acuerdo para habilitar la firma.",
+                "↓ Scroll to the end of the agreement to enable signing."
+              )}
+        </div>
       </section>
 
       {/* Section 6 */}
       <section className="section">
         <h2>6. {L("Ejecución Vinculante", "Binding Execution")}</h2>
 
-        <div className="attest">
+        {!msaRead && (
+          <p className="hint" style={{ color: "var(--danger)", fontWeight: 600 }}>
+            {L(
+              "Debe leer el Acuerdo Maestro completo (sección 5) antes de poder firmar.",
+              "You must read the full Master Services Agreement (section 5) before you can sign."
+            )}
+          </p>
+        )}
+
+        <div className={msaRead ? "attest" : "attest locked"}>
           <div className="check">
-            <input type="checkbox" id="attestation" name="attestation" />
+            <input
+              type="checkbox"
+              id="attestation"
+              name="attestation"
+              disabled={!msaRead}
+            />
             <label htmlFor="attestation">
               {L(
                 "AL MARCAR ESTA CASILLA, ACEPTO EXPRESAMENTE QUEDAR OBLIGADO POR TODOS LOS TÉRMINOS, CONDICIONES Y DISPOSICIONES DEL CONTRATO MAESTRO DE SERVICIO DETALLADO ARRIBA. CERTIFICO QUE LA INFORMACIÓN PROPORCIONADA EN ESTE FORMULARIO ES VERDADERA Y CORRECTA.",
@@ -812,9 +855,14 @@ export default function IntakeForm() {
           {errors.attestation && <div className="error">{errors.attestation}</div>}
         </div>
 
-        <div className="attest" style={{ marginTop: 12 }}>
+        <div className={msaRead ? "attest" : "attest locked"} style={{ marginTop: 12 }}>
           <div className="check">
-            <input type="checkbox" id="personalGuarantee" name="personalGuarantee" />
+            <input
+              type="checkbox"
+              id="personalGuarantee"
+              name="personalGuarantee"
+              disabled={!msaRead}
+            />
             <label htmlFor="personalGuarantee">
               {L(
                 "GARANTÍA PERSONAL: Yo/Nosotros garantizamos personal e incondicionalmente el pago completo y puntual a todos los empleados, agentes, subcontratistas, proveedores de materiales y de mano de obra del Subcontratista.",
