@@ -21,6 +21,51 @@ into Quickbase for a compliance reviewer.
 
 ## End-to-end workflow
 
+```mermaid
+flowchart TD
+    Start(["Applicant opens /apply"]) --> Fill["Fill company, capacity,<br/>contacts, entity type, signers"]
+    Fill --> Gate{{"Anti-abuse: Turnstile CAPTCHA<br/>+ email OTP via Resend"}}
+    Gate --> Upload["Upload 7 compliance PDFs"]
+    Upload -->|"client-direct"| Blob[("Vercel Blob<br/>staging, public")]
+    Upload --> MSA{"Scrolled the full<br/>MSA to the end?"}
+    MSA -- "not yet" --> MSA
+    MSA -- "yes" --> Sign["Draw signature(s),<br/>accept MSA + guarantee"]
+    Sign --> Submit(["Submit"])
+
+    Submit --> API["POST /api/submit"]
+    API --> Valid{"Valid, Turnstile<br/>+ OTP re-verified?"}
+    Valid -- "no" --> Err["Return error"]
+    Err --> Submit
+    Valid -- "yes" --> SigUp["Upload signature PNGs"]
+    SigUp --> Fwd["Forward payload to n8n<br/>(x-webhook-secret)"]
+    Fwd -- "502 on failure" --> Submit
+
+    Fwd --> WH["n8n Webhook"]
+    subgraph n8n ["n8n orchestration"]
+        WH --> Cfg["Config and Prepare"]
+        Cfg --> SAM["SAM.gov Exclusions"]
+        SAM --> CSL["Trade.gov CSL (OFAC)"]
+        CSL --> Eval["Evaluate Screening"]
+        Eval --> Build["Build Quickbase Record:<br/>fetch Blob PDFs, base64-attach"]
+        Build --> Create["Quickbase: Create Record"]
+        Create --> Shape["Shape Response<br/>(success = createdRecordIds)"]
+        Shape --> Resp["Respond to Webhook"]
+        Resp --> Clean["Delete staging blobs<br/>via /api/blob/delete"]
+    end
+
+    Blob -. "fetched by" .-> Build
+    Resp -. "ok, recordId, flagged" .-> Fwd
+
+    Create --> Rec[("Quickbase record:<br/>data, attachments,<br/>signatures, flags")]
+    Rec --> Score["Formula fields:<br/>Vetting Score 0-100,<br/>Disqualifier, Recommendation"]
+    Score --> Review{"Compliance reviewer<br/>verifies PR-side items"}
+    Review -- "approve" --> Approved(["Approved"])
+    Review -- "reject" --> Rejected(["Rejected"])
+```
+
+<details>
+<summary>The same flow as a plain-text diagram</summary>
+
 ```
 APPLICANT (browser)                          BYRDSON INFRASTRUCTURE
 ───────────────────                          ──────────────────────
@@ -59,6 +104,8 @@ APPLICANT (browser)                          BYRDSON INFRASTRUCTURE
    Disqualifier Flag, Recommendation, Status.
      → Compliance reviewer verifies the PR-side items and approves/rejects.
 ```
+
+</details>
 
 ### Step by step
 
