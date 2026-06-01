@@ -33,6 +33,65 @@ const ENTITY_TYPES = [
   { value: "corp", es: "Corporación", en: "Corporation" },
 ];
 
+// Bolds an ALL-CAPS clause/paragraph label that precedes a colon
+// (e.g. "DESEMPEÑO OPORTUNO: ..."). Leaves other text untouched.
+const MSA_LABEL_RE = /^([A-ZÁÉÍÓÚÑ][^a-z:]{2,70}):\s+([\s\S]+)$/;
+
+function renderMsaInline(text) {
+  const m = text.match(MSA_LABEL_RE);
+  if (!m) return text;
+  return (
+    <>
+      <span className="msa-label">{m[1]}:</span> {m[2]}
+    </>
+  );
+}
+
+// Renders the verbatim MSA text as a formatted legal document: a centered
+// title, numbered section headings, hanging-indent lettered clauses (a., b.,
+// …), and justified body paragraphs. The wording itself is never modified.
+function MsaContent({ text }) {
+  const out = [];
+  text.split("\n").forEach((raw, i) => {
+    const line = raw.trim();
+    if (!line) return;
+    if (line === "CONTRATO MAESTRO DE SERVICIO") {
+      out.push(
+        <h3 key={i} className="msa-doc-title">
+          {line}
+        </h3>
+      );
+      return;
+    }
+    const section = line.match(/^(\d+)\.\s+(.+)$/);
+    if (section) {
+      out.push(
+        <h4 key={i} className="msa-section">
+          <span className="msa-num">{section[1]}.</span>
+          {section[2]}
+        </h4>
+      );
+      return;
+    }
+    const clause = line.match(/^([a-z])\.\s+(.+)$/);
+    if (clause) {
+      out.push(
+        <p key={i} className="msa-clause">
+          <span className="msa-letter">{clause[1]}.</span>
+          {renderMsaInline(clause[2])}
+        </p>
+      );
+      return;
+    }
+    out.push(
+      <p key={i} className="msa-para">
+        {renderMsaInline(line)}
+      </p>
+    );
+  });
+  return out;
+}
+
 export default function IntakeForm() {
   const [lang, setLang] = useState("es");
   const [entityType, setEntityType] = useState("");
@@ -811,7 +870,7 @@ export default function IntakeForm() {
           )}
         </p>
         <div className="msa-box" ref={msaRef} onScroll={onMsaScroll} tabIndex={0}>
-          {MSA_TEXT_ES}
+          <MsaContent text={MSA_TEXT_ES} />
         </div>
         <div className={msaRead ? "msa-status read" : "msa-status"}>
           {msaRead

@@ -333,15 +333,68 @@ select:focus {
 /* ===================== MSA + attestation ===================== */
 .msa-box {
   border: 1px solid var(--border);
-  border-left: 3px solid var(--steel);
+  border-left: 3px solid var(--brand-accent);
   border-radius: 4px;
-  background: #f7f9fc;
-  padding: 16px;
-  max-height: 320px;
+  background: #fdfdff;
+  padding: 22px 26px;
+  max-height: 400px;
   overflow-y: auto;
-  white-space: pre-wrap;
-  font-size: 0.85rem;
-  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-family: Georgia, "Times New Roman", "Noto Serif", serif;
+  font-size: 0.9rem;
+  line-height: 1.62;
+  color: #28324a;
+}
+
+.msa-box .msa-doc-title {
+  margin: 0 0 18px;
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 1.02rem;
+  color: var(--navy-700);
+}
+
+.msa-box .msa-section {
+  margin: 22px 0 9px;
+  font-size: 0.93rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--navy-700);
+}
+
+.msa-box .msa-section:first-of-type {
+  margin-top: 6px;
+}
+
+.msa-box .msa-num {
+  display: inline-block;
+  min-width: 2em;
+  color: var(--brand-accent-dk);
+}
+
+.msa-box .msa-para {
+  margin: 0 0 12px;
+  text-align: justify;
+}
+
+.msa-box .msa-clause {
+  margin: 0 0 9px;
+  padding-left: 1.9em;
+  text-indent: -1.9em;
+  text-align: justify;
+}
+
+.msa-box .msa-letter {
+  display: inline-block;
+  min-width: 1.9em;
+  font-weight: 700;
+  color: var(--brand-accent-dk);
+}
+
+.msa-box .msa-label {
+  font-weight: 700;
+  color: var(--navy-700);
 }
 
 .attest {
